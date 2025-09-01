@@ -1,0 +1,1 @@
+go build -o dist/emeral.dll -buildmode=c-shared main.go
