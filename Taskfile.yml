@@ -3,14 +3,14 @@
 version: '3'
 
 vars:
-  output: "{{.TASKFILE_DIR}}/dist/emeral.dll"
+  output: "{{.TASKFILE_DIR}}/dist"
 
 tasks:
   build:
     args:
       - output
     cmds:
-      - go build -o "{{.output}}" -buildmode=c-shared main.go
+      - go build -o "{{.output}}/emeral.dll" -buildmode=c-shared main.go
     silent: false
 
   clean:
