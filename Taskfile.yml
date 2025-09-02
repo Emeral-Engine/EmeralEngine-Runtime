@@ -10,7 +10,7 @@ tasks:
     args:
       - output
     cmds:
-      - go build -o "{{.output}}/emeral.dll" -buildmode=c-shared main.go
+      - go build -o "{{.output}}/emeral.dll" -ldflags="-s -w" -trimpath -buildmode=c-shared main.go
     silent: false
 
   clean:
