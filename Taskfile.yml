@@ -1,0 +1,23 @@
+# https://taskfile.dev
+
+version: '3'
+
+vars:
+  output: "{{.TASKFILE_DIR}}/dist/emeral.dll"
+
+tasks:
+  build:
+    args:
+      - output
+    cmds:
+      - go build -o "{{.output}}" -buildmode=c-shared main.go
+    silent: false
+
+  clean:
+    cmds:
+      - rm -r "{{.dest}}"
+    silent: false
+
+  default:
+    cmds:
+      - task: build
