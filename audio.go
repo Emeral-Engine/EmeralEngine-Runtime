@@ -1,17 +1,16 @@
 package main
 
-//#include <string.h>
 import "C"
 
 import (
 	"bytes"
-	"fmt"
 	"io"
 	"sync"
 	"time"
 	"unsafe"
 
 	"github.com/gopxl/beep"
+	"github.com/gopxl/beep/effects"
 	"github.com/gopxl/beep/mp3"
 	"github.com/gopxl/beep/speaker"
 	"github.com/gopxl/beep/wav"
@@ -19,7 +18,10 @@ import (
 
 type audioHandle struct {
 	id       int
+	sr       beep.SampleRate
 	streamer beep.StreamSeekCloser
+	ctrl     *beep.Ctrl
+	volume   *effects.Volume
 }
 
 var (
@@ -28,34 +30,6 @@ var (
 	nextID        = 1
 	speakerInited bool
 )
-
-type FadeOut struct {
-	Streamer beep.Streamer
-	Volume   float64
-	Step     float64
-	Done     chan struct{}
-}
-
-func (f *FadeOut) Stream(samples [][2]float64) (n int, ok bool) {
-	n, ok = f.Streamer.Stream(samples)
-	for i := 0; i < n; i++ {
-		samples[i][0] *= f.Volume
-		samples[i][1] *= f.Volume
-		f.Volume -= f.Step
-		if f.Volume < 0 {
-			f.Volume = 0
-		}
-	}
-	if f.Volume == 0 {
-		select {
-		case f.Done <- struct{}{}:
-		default:
-		}
-		return n, false
-	}
-	return n, ok
-}
-func (f *FadeOut) Err() error { return f.Streamer.Err() }
 
 //export PlayAudio
 func PlayAudio(h *C.char) C.int {
@@ -88,62 +62,67 @@ func _PlayAudioWithBytes(buf []byte) C.int {
 
 	id := nextID
 	nextID++
-
-	handles[id] = audioHandle{id: id, streamer: streamer}
-
+	vol := &effects.Volume{
+		Streamer: streamer,
+		Base:     2,
+		Volume:   0,
+		Silent:   false,
+	}
+	ctrl := &beep.Ctrl{
+		Streamer: vol,
+		Paused:   false,
+	}
 	done := make(chan bool, 1)
-	speaker.Play(beep.Seq(streamer, beep.Callback(func() {
+	handles[id] = audioHandle{id: id, streamer: streamer, sr: format.SampleRate, volume: vol, ctrl: ctrl}
+	speaker.Play(beep.Seq(ctrl, beep.Callback(func() {
 		done <- true
 	})))
-
 	go func(myID int, s beep.StreamSeekCloser, done chan bool) {
 		<-done
-		mu.Lock()
-		defer mu.Unlock()
+		speaker.Lock()
+		defer speaker.Unlock()
 		s.Close()
 		delete(handles, myID)
 	}(id, streamer, done)
-
 	return C.int(id)
 }
 
 //export StopAudio
 func StopAudio(id C.int) {
-	mu.Lock()
 	handle, ok := handles[int(id)]
 	if !ok {
 		mu.Unlock()
 		return
 	}
 	delete(handles, int(id))
-	mu.Unlock()
+	done := make(chan bool)
+	steps := 30
+	stepDelay := 3 * time.Second / time.Duration(steps)
+	stepSize := -3.0 / float64(steps) // -3dB ずつ下げる
 
-	fade := &FadeOut{
-		Streamer: handle.streamer,
-		Volume:   1.0,
-		Step:     0.001,
-		Done:     make(chan struct{}, 1),
-	}
-
-	speaker.Lock()
-	speaker.Play(fade)
-	speaker.Unlock()
-
-	go func(s beep.StreamSeekCloser, done chan struct{}) {
-		<-fade.Done
-		s.Close()
-	}(handle.streamer, fade.Done)
+	go func() {
+		for i := 0; i < steps; i++ {
+			speaker.Lock()
+			handle.volume.Volume += stepSize
+			speaker.Unlock()
+			time.Sleep(stepDelay)
+		}
+		speaker.Lock()
+		handle.streamer.Close()
+		handle.ctrl.Streamer = nil
+		speaker.Unlock()
+		done <- true
+	}()
+	<-done
 }
 
 //export StopAllAudio
 func StopAllAudio() {
 	mu.Lock()
 	defer mu.Unlock()
-	for id, h := range handles {
-		h.streamer.Close()
-		delete(handles, id)
+	for id := range handles {
+		StopAudio(C.int(id))
 	}
-	handles = make(map[int]audioHandle)
 }
 
 func decodeAudio(data []byte) (beep.StreamSeekCloser, beep.Format, error) {
@@ -154,8 +133,4 @@ func decodeAudio(data []byte) (beep.StreamSeekCloser, beep.Format, error) {
 		return mp3.Decode(rc)
 	}
 	return s, f, nil
-}
-
-func main() {
-	fmt.Println(PlayAudio(C.CString("ac120b70cf3e1f930a658f61aa728636a8767abab1752ad1f8f64cf3ade909b7")))
 }
