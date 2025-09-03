@@ -42,6 +42,7 @@ func _GetResource(_h *C.char, length *C.int) *C.char {
 	if err != nil {
 		return nil
 	}
+	defer d.Close()
 	res, err := d.DecodeAll(b, nil)
 	if err != nil {
 		return nil

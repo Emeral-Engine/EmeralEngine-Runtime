@@ -1,5 +1,6 @@
 package main
 
+//#include <string.h>
 import "C"
 
 import (
@@ -10,10 +11,10 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/faiface/beep"
-	"github.com/faiface/beep/mp3"
-	"github.com/faiface/beep/speaker"
-	"github.com/faiface/beep/wav"
+	"github.com/gopxl/beep"
+	"github.com/gopxl/beep/mp3"
+	"github.com/gopxl/beep/speaker"
+	"github.com/gopxl/beep/wav"
 )
 
 type audioHandle struct {
@@ -57,13 +58,22 @@ func (f *FadeOut) Stream(samples [][2]float64) (n int, ok bool) {
 func (f *FadeOut) Err() error { return f.Streamer.Err() }
 
 //export PlayAudio
-func PlayAudio(data *C.char, length C.int, ext *C.char) C.int {
-	goBytes := C.GoBytes(unsafe.Pointer(data), length)
-	extension := C.GoString(ext)
+func PlayAudio(h *C.char) C.int {
+	length := C.int(0)
+	b := GetResourceData(h, &length)
+	buf := C.GoBytes(unsafe.Pointer(b), length)
+	return _PlayAudioWithBytes(buf)
+}
 
-	streamer, format, err := decodeAudio(goBytes, extension)
+//export PlayAudioWithBytes
+func PlayAudioWithBytes(b *C.char, l C.int) C.int {
+	return _PlayAudioWithBytes(C.GoBytes(unsafe.Pointer(b), l))
+}
+
+func _PlayAudioWithBytes(buf []byte) C.int {
+	streamer, format, err := decodeAudio(buf)
 	if err != nil {
-		return -1
+		panic(err)
 	}
 
 	mu.Lock()
@@ -71,7 +81,7 @@ func PlayAudio(data *C.char, length C.int, ext *C.char) C.int {
 
 	if !speakerInited {
 		if err := speaker.Init(format.SampleRate, format.SampleRate.N(time.Second/10)); err != nil {
-			return -2
+			panic(err)
 		}
 		speakerInited = true
 	}
@@ -136,15 +146,16 @@ func StopAllAudio() {
 	handles = make(map[int]audioHandle)
 }
 
-func decodeAudio(data []byte, ext string) (beep.StreamSeekCloser, beep.Format, error) {
+func decodeAudio(data []byte) (beep.StreamSeekCloser, beep.Format, error) {
 	reader := bytes.NewReader(data)
 	rc := io.NopCloser(reader)
-	switch ext {
-	case ".mp3":
+	s, f, err := wav.Decode(rc)
+	if err != nil {
 		return mp3.Decode(rc)
-	case ".wav":
-		return wav.Decode(rc)
-	default:
-		return nil, beep.Format{}, fmt.Errorf("unsupported extension: %s", ext)
 	}
+	return s, f, nil
+}
+
+func main() {
+	fmt.Println(PlayAudio(C.CString("ac120b70cf3e1f930a658f61aa728636a8767abab1752ad1f8f64cf3ade909b7")))
 }

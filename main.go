@@ -11,6 +11,8 @@ func Free(ptr *C.char) {
 	C.free(unsafe.Pointer(ptr))
 }
 
+/*
 func main() {
 
 }
+*/
