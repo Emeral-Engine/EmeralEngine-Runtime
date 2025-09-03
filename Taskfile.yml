@@ -15,7 +15,7 @@ tasks:
 
   clean:
     cmds:
-      - rm -r "{{.dest}}"
+      - rm -r "{{.output}}"
     silent: false
 
   default:
