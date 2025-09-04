@@ -20,86 +20,118 @@ type audioHandle struct {
 	id       int
 	sr       beep.SampleRate
 	streamer beep.StreamSeekCloser
-	ctrl     *beep.Ctrl
 	volume   *effects.Volume
 }
 
 var (
-	mu            sync.Mutex
-	handles       = make(map[int]audioHandle)
+	mu            sync.RWMutex
+	handles       = make(map[int]*audioHandle)
 	nextID        = 1
 	speakerInited bool
 )
 
 //export PlayAudio
 func PlayAudio(h *C.char) C.int {
+	return _PlayAudio(h, false)
+}
+
+//export PlayLoopAudio
+func PlayLoopAudio(h *C.char) C.int {
+	return _PlayAudio(h, true)
+}
+
+func _PlayAudio(h *C.char, loop bool) C.int {
 	length := C.int(0)
 	b := GetResourceData(h, &length)
 	buf := C.GoBytes(unsafe.Pointer(b), length)
-	return _PlayAudioWithBytes(buf)
+	return _PlayAudioWithBytes(buf, loop)
 }
 
 //export PlayAudioWithBytes
 func PlayAudioWithBytes(b *C.char, l C.int) C.int {
-	return _PlayAudioWithBytes(C.GoBytes(unsafe.Pointer(b), l))
+	return _PlayAudioWithBytes(C.GoBytes(unsafe.Pointer(b), l), false)
 }
 
-func _PlayAudioWithBytes(buf []byte) C.int {
+//export PlayLoopAudioWithBytes
+func PlayLoopAudioWithBytes(b *C.char, l C.int) C.int {
+	return _PlayAudioWithBytes(C.GoBytes(unsafe.Pointer(b), l), true)
+}
+
+func _PlayAudioWithBytes(buf []byte, loop bool) C.int {
 	streamer, format, err := decodeAudio(buf)
 	if err != nil {
-		panic(err)
+		return -1
 	}
-
-	mu.Lock()
-	defer mu.Unlock()
 
 	if !speakerInited {
 		if err := speaker.Init(format.SampleRate, format.SampleRate.N(time.Second/10)); err != nil {
-			panic(err)
+			return -1
 		}
 		speakerInited = true
 	}
-
+	mu.Lock()
+	if len(handles) == 0 {
+		nextID = 1
+	}
 	id := nextID
 	nextID++
-	vol := &effects.Volume{
-		Streamer: streamer,
-		Base:     2,
-		Volume:   0,
-		Silent:   false,
+	mu.Unlock()
+	var (
+		vol *effects.Volume
+	)
+	if loop {
+		vol = &effects.Volume{
+			Streamer: beep.Loop(-1, streamer),
+			Base:     2,
+			Volume:   0,
+			Silent:   false,
+		}
+	} else {
+		vol = &effects.Volume{
+			Streamer: streamer,
+			Base:     2,
+			Volume:   0,
+			Silent:   false,
+		}
 	}
-	ctrl := &beep.Ctrl{
-		Streamer: vol,
-		Paused:   false,
-	}
+	mu.Lock()
+	handles[id] = &audioHandle{id: id, streamer: streamer, sr: format.SampleRate, volume: vol}
+	mu.Unlock()
 	done := make(chan bool, 1)
-	handles[id] = audioHandle{id: id, streamer: streamer, sr: format.SampleRate, volume: vol, ctrl: ctrl}
-	speaker.Play(beep.Seq(ctrl, beep.Callback(func() {
+	speaker.Play(beep.Seq(vol, beep.Callback(func() {
 		done <- true
 	})))
-	go func(myID int, s beep.StreamSeekCloser, done chan bool) {
+	go func() {
 		<-done
+		mu.Lock()
+		_, ok := handles[id]
+		if !ok {
+			mu.Unlock()
+			return
+		}
 		speaker.Lock()
 		defer speaker.Unlock()
-		s.Close()
-		delete(handles, myID)
-	}(id, streamer, done)
+		streamer.Close()
+		delete(handles, id)
+		mu.Unlock()
+	}()
 	return C.int(id)
 }
 
 //export StopAudio
 func StopAudio(id C.int) {
+	mu.Lock()
 	handle, ok := handles[int(id)]
 	if !ok {
 		mu.Unlock()
 		return
 	}
 	delete(handles, int(id))
+	mu.Unlock()
 	done := make(chan bool)
 	steps := 30
 	stepDelay := 3 * time.Second / time.Duration(steps)
 	stepSize := -3.0 / float64(steps) // -3dB ずつ下げる
-
 	go func() {
 		for i := 0; i < steps; i++ {
 			speaker.Lock()
@@ -109,7 +141,7 @@ func StopAudio(id C.int) {
 		}
 		speaker.Lock()
 		handle.streamer.Close()
-		handle.ctrl.Streamer = nil
+		handle.volume.Streamer = nil
 		speaker.Unlock()
 		done <- true
 	}()
@@ -118,19 +150,27 @@ func StopAudio(id C.int) {
 
 //export StopAllAudio
 func StopAllAudio() {
-	mu.Lock()
-	defer mu.Unlock()
-	for id := range handles {
-		StopAudio(C.int(id))
+	go func() {
+		for id := 1; id <= getMaxID(handles); id++ {
+			StopAudio(C.int(id))
+		}
+	}()
+}
+
+func getMaxID[T any](d map[int]T) int {
+	res := -1
+	for k := range d {
+		if res < k {
+			res = k
+		}
 	}
+	return res
 }
 
 func decodeAudio(data []byte) (beep.StreamSeekCloser, beep.Format, error) {
-	reader := bytes.NewReader(data)
-	rc := io.NopCloser(reader)
-	s, f, err := wav.Decode(rc)
+	s, f, err := wav.Decode(bytes.NewReader(data))
 	if err != nil {
-		return mp3.Decode(rc)
+		return mp3.Decode(io.NopCloser(bytes.NewReader(data)))
 	}
 	return s, f, nil
 }
