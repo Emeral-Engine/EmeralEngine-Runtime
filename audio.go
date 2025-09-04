@@ -100,13 +100,6 @@ func _PlayAudioWithBytes(buf []byte, loop bool) C.int {
 	})))
 	go func() {
 		<-done
-		mu.RLock()
-		_, ok := handles[id]
-		if !ok {
-			mu.Unlock()
-			return
-		}
-		mu.RUnlock()
 		_delStream(id)
 	}()
 	return C.int(id)
@@ -118,7 +111,7 @@ func _delStream(id int) {
 	h, ok := handles[id]
 	if ok {
 		h.streamer.Close()
-		handles[id].volume.Streamer = nil
+		h.volume.Streamer = nil
 		delete(handles, id)
 	}
 	speaker.Unlock()
