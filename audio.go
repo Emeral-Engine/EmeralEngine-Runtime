@@ -70,9 +70,6 @@ func _PlayAudioWithBytes(buf []byte, loop bool) C.int {
 		speakerInited = true
 	}
 	mu.Lock()
-	if len(handles) == 0 {
-		nextID = 1
-	}
 	id := nextID
 	nextID++
 	mu.Unlock()
@@ -103,19 +100,29 @@ func _PlayAudioWithBytes(buf []byte, loop bool) C.int {
 	})))
 	go func() {
 		<-done
-		mu.Lock()
+		mu.RLock()
 		_, ok := handles[id]
 		if !ok {
 			mu.Unlock()
 			return
 		}
-		speaker.Lock()
-		defer speaker.Unlock()
-		streamer.Close()
-		delete(handles, id)
-		mu.Unlock()
+		mu.RUnlock()
+		_delStream(id)
 	}()
 	return C.int(id)
+}
+
+func _delStream(id int) {
+	mu.Lock()
+	speaker.Lock()
+	h, ok := handles[id]
+	if ok {
+		h.streamer.Close()
+		handles[id].volume.Streamer = nil
+		delete(handles, id)
+	}
+	speaker.Unlock()
+	mu.Unlock()
 }
 
 //export StopAudio
@@ -129,9 +136,9 @@ func StopAudio(id C.int) {
 	delete(handles, int(id))
 	mu.Unlock()
 	done := make(chan bool)
-	steps := 30
-	stepDelay := 3 * time.Second / time.Duration(steps)
-	stepSize := -3.0 / float64(steps) // -3dB ずつ下げる
+	steps := 60
+	stepDelay := 1 * time.Second / time.Duration(steps)
+	stepSize := -6.0 / float64(steps)
 	go func() {
 		for i := 0; i < steps; i++ {
 			speaker.Lock()
@@ -139,11 +146,7 @@ func StopAudio(id C.int) {
 			speaker.Unlock()
 			time.Sleep(stepDelay)
 		}
-		mu.Lock()
-		speaker.Lock()
-		handle.streamer.Close()
-		speaker.Unlock()
-		mu.Unlock()
+		_delStream(int(id))
 		done <- true
 	}()
 	<-done
@@ -151,21 +154,14 @@ func StopAudio(id C.int) {
 
 //export StopAllAudio
 func StopAllAudio() {
+	mu.RLock()
+	h := handles
+	mu.RUnlock()
 	go func() {
-		for id := 1; id <= getMaxID(handles); id++ {
-			StopAudio(C.int(id))
+		for i := range h {
+			StopAudio(C.int(i))
 		}
 	}()
-}
-
-func getMaxID[T any](d map[int]T) int {
-	res := -1
-	for k := range d {
-		if res < k {
-			res = k
-		}
-	}
-	return res
 }
 
 func decodeAudio(data []byte) (beep.StreamSeekCloser, beep.Format, error) {

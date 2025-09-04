@@ -86,10 +86,3 @@ func _parse(b []byte) {
 	}
 	json.Unmarshal(raw, &_table)
 }
-
-func init() {
-	data, err := os.ReadFile(_get_path())
-	if err == nil {
-		_parse(data)
-	}
-}
