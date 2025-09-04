@@ -139,10 +139,11 @@ func StopAudio(id C.int) {
 			speaker.Unlock()
 			time.Sleep(stepDelay)
 		}
+		mu.Lock()
 		speaker.Lock()
 		handle.streamer.Close()
-		handle.volume.Streamer = nil
 		speaker.Unlock()
+		mu.Unlock()
 		done <- true
 	}()
 	<-done
