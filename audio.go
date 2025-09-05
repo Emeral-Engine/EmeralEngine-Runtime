@@ -30,6 +30,10 @@ var (
 	speakerInited bool
 )
 
+const (
+	SR beep.SampleRate = 48000
+)
+
 //export PlayAudio
 func PlayAudio(h *C.char) C.int {
 	return _PlayAudio(h, false)
@@ -62,9 +66,8 @@ func _PlayAudioWithBytes(buf []byte, loop bool) C.int {
 	if err != nil {
 		return -1
 	}
-
 	if !speakerInited {
-		if err := speaker.Init(format.SampleRate, format.SampleRate.N(time.Second/10)); err != nil {
+		if err := speaker.Init(SR, SR.N(time.Second/10)); err != nil {
 			return -1
 		}
 		speakerInited = true
