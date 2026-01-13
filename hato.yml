@@ -1,0 +1,15 @@
+# https://github.com/midry3/hato
+
+default:
+  aliases:
+    - build
+    - b
+  nargs: 1
+  actions:
+    - go build -o "%1/emeral.dll" -ldflags="-s -w" -trimpath -buildmode=c-shared
+
+clean:
+  aliases:
+    - c
+  actions:
+    - rm -r dist || true
